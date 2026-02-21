@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resonant Thread: Plasma Resonance</title>
+    <style>
+        :root { --accent: #a0a0ff; --bg: #020208; --glass: rgba(15, 15, 30, 0.85); }
+        body { margin: 0; overflow: hidden; background: var(--bg); font-family: 'Inter', system-ui, sans-serif; color: #fff; }
+        
+        /* UI Layout */
+        #ui { position: absolute; top: 20px; left: 20px; z-index: 100; width: 340px; height: calc(100vh - 40px); pointer-events: none; display: flex; flex-direction: column; }
+        .panel { 
+            pointer-events: auto; background: var(--glass); padding: 20px; border-radius: 20px; 
+            border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(25px);
+            display: flex; flex-direction: column; max-height: 100%; box-shadow: 0 10px 50px rgba(0,0,0,0.8);
+        }
+        
+        h1 { margin: 0; font-size: 16px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
+        
+        /* Layer List */
+        #layersContainer { margin-top: 20px; overflow-y: auto; flex-grow: 1; padding-right: 10px; }
+        #layersContainer::-webkit-scrollbar { width: 4px; }
+        #layersContainer::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 10px; }
+
+        .layer-item { 
+            background: rgba(255,255,255,0.03); margin-bottom: 12px; padding: 12px; 
+            border-radius: 12px; border-left: 4px solid var(--accent); transition: all 0.3s;
+        }
+        .layer-item:hover { background: rgba(255,255,255,0.08); transform: translateX(5px); }
+        .layer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .layer-name { font-size: 11px; font-weight: bold; opacity: 0.9; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+        
+        .layer-controls { display: flex; gap: 8px; align-items: center; }
+        .btn-small { padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 9px; font-weight: bold; transition: 0.2s; }
+        .play-btn { background: #00ffcc; color: #000; }
+        .note-btn { background: rgba(255,255,255,0.1); color: #fff; }
+        .color-input { width: 30px; height: 24px; border: none; background: none; cursor: pointer; }
+
+        #globalControls { margin-top: 15px; display: flex; gap: 10px; }
+        .global-btn { flex: 1; padding: 12px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 11px; }
+
+        /* Note Pop-up */
+        #noteDisplay { 
+            position: absolute; bottom: 30px; right: 30px; width: 320px; 
+            background: var(--glass); padding: 25px; border-radius: 20px;
+            border-bottom: 5px solid var(--accent); display: none;
+            backdrop-filter: blur(15px); font-family: 'Georgia', serif; line-height: 1.6;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6); z-index: 200;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="ui">
+        <div class="panel">
+            <h1>Resonant Thread</h1>
+            <input type="file" id="folderInput" webkitdirectory directory multiple style="margin-top:15px; font-size:10px;">
+            
+            <div id="layersContainer">
+                <div style="text-align: center; opacity: 0.4; font-size: 11px; margin-top: 40px;">Sube una carpeta para visualizar tus frecuencias...</div>
+            </div>
+
+            <div id="globalControls">
+                <button class="global-btn" id="stopAll" style="background:#ff3366; color:#fff">SILENCIAR TODO</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="noteDisplay"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- SHADERS: PLASMA & SINE WAVES ---
+        const vShader = `
+            varying float vDistortion;
+            uniform float uTime;
+            uniform float uFreq;
+            uniform float uAmp;
+
+            void main() {
+                // Combinación de ondas sinusoidales para efecto plasma/líquido
+                float wave = sin(position.x * uFreq + uTime) * cos(position.y * uFreq + uTime);
+                wave += sin(position.z * uFreq * 0.5 + uTime * 1.5);
+                
+                vDistortion = wave;
+                vec3 newPos = position + normal * wave * uAmp;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(newPos, 1.0);
+            }
+        `;
+
+        const fShader = `
+            varying float vDistortion;
+            uniform vec3 uColor;
+            uniform float uOpacity;
+
+            void main() {
+                // Efecto de plasma basado en la distorsión del vértice
+                float intensity = vDistortion * 0.5 + 0.5;
+                vec3 plasma = uColor * (0.8 + 0.5 * intensity);
+                gl_FragColor = vec4(plasma, uOpacity * (0.5 + 0.5 * intensity));
+            }
+        `;
+
+        // --- ENGINE SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 50, 150);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.4;
+        controls.enableDamping = true;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.4, 0.4, 0.1));
+
+        const planetGroup = new THREE.Group();
+        scene.add(planetGroup);
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const activeLayers = new Map();
+        const notesMap = new Map();
+
+        // --- CORE FUNCTIONS ---
+
+        function createLayer(buffer, name, index, total) {
+            const progress = index / total;
+            const radius = 25 + (progress * 60);
+            const color = new THREE.Color().setHSL(progress, 0.7, 0.6);
+            
+            const geo = new THREE.IcosahedronGeometry(radius, 40);
+            const skin = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+                vertexShader: vShader, fragmentShader: fShader, transparent: true,
+                uniforms: {
+                    uTime: { value: 0 },
+                    uFreq: { value: 0.05 + Math.random() * 0.1 },
+                    uAmp: { value: 4.0 },
+                    uColor: { value: color },
+                    uOpacity: { value: 0.2 }
+                }
+            }));
+
+            const skeleton = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ 
+                color: color, wireframe: true, transparent: true, opacity: 0.1 
+            }));
+
+            const group = new THREE.Group();
+            group.add(skin); group.add(skeleton);
+            planetGroup.add(group);
+
+            // Audio Logic
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = 0.5;
+            gainNode.connect(audioCtx.destination);
+
+            const layerInfo = { group, skin, skeleton, buffer, gainNode, source: null, playing: false };
+            activeLayers.set(name, layerInfo);
+
+            addLayerToUI(name, color.getHexString(), layerInfo);
+        }
+
+        function addLayerToUI(name, hexColor, layer) {
+            const container = document.getElementById('layersContainer');
+            if (container.children.length === 1 && container.children[0].style.textAlign === 'center') container.innerHTML = '';
+
+            const item = document.createElement('div');
+            item.className = 'layer-item';
+            item.innerHTML = `
+                <div class="layer-header">
+                    <span class="layer-name">${name}</span>
+                    <input type="color" class="color-input" value="#${hexColor}">
+                </div>
+                <div class="layer-controls">
+                    <button class="btn-small play-btn">ESCUCHAR</button>
+                    <button class="btn-small note-btn">VER NOTA</button>
+                </div>
+            `;
+
+            // Color Picker Individual
+            item.querySelector('.color-input').oninput = (e) => {
+                const c = new THREE.Color(e.target.value);
+                layer.skin.material.uniforms.uColor.value.copy(c);
+                layer.skeleton.material.color.copy(c);
+            };
+
+            // Play Individual
+            const pBtn = item.querySelector('.play-btn');
+            pBtn.onclick = () => {
+                if(audioCtx.state === 'suspended') audioCtx.resume();
+                
+                if (layer.playing) {
+                    layer.source.stop();
+                    layer.playing = false;
+                    pBtn.innerText = 'ESCUCHAR';
+                    pBtn.style.background = '#00ffcc';
+                } else {
+                    layer.source = audioCtx.createBufferSource();
+                    layer.source.buffer = layer.buffer;
+                    layer.source.loop = true;
+                    layer.source.connect(layer.gainNode);
+                    layer.source.start();
+                    layer.playing = true;
+                    pBtn.innerText = 'PAUSAR';
+                    pBtn.style.background = '#ff3366';
+                }
+            };
+
+            // Nota Individual
+            item.querySelector('.note-btn').onclick = () => {
+                const note = notesMap.get(name) || "Esta capa aún no tiene una reflexión escrita.";
+                const display = document.getElementById('noteDisplay');
+                display.innerHTML = `<h3 style="margin-top:0; color:var(--accent)">Reflexión: ${name}</h3>${note}`;
+                display.style.display = 'block';
+            };
+
+            container.appendChild(item);
+        }
+
+        // --- FILE HANDLING ---
+        document.getElementById('folderInput').onchange = async (e) => {
+            const files = Array.from(e.target.files);
+            const audioFiles = files.filter(f => f.type.startsWith('audio/')).sort((a,b) => a.lastModified - b.lastModified);
+            const textFiles = files.filter(f => f.name.endsWith('.txt'));
+
+            for(const f of textFiles) {
+                const text = await f.text();
+                notesMap.set(f.name.replace('.txt', ''), text);
+            }
+
+            planetGroup.clear();
+            activeLayers.clear();
+            document.getElementById('layersContainer').innerHTML = '';
+
+            for(let i=0; i<audioFiles.length; i++) {
+                const buffer = await audioCtx.decodeAudioData(await audioFiles[i].arrayBuffer());
+                const baseName = audioFiles[i].name.split('.')[0];
+                createLayer(buffer, baseName, i, audioFiles.length);
+            }
+        };
+
+        document.getElementById('stopAll').onclick = () => {
+            activeLayers.forEach(l => { if(l.source && l.playing) l.source.stop(); l.playing = false; });
+            document.querySelectorAll('.play-btn').forEach(b => { b.innerText = 'ESCUCHAR'; b.style.background = '#00ffcc'; });
+        };
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const t = performance.now() * 0.001;
+            
+            activeLayers.forEach((layer, name) => {
+                layer.skin.material.uniforms.uTime.value = t;
+                layer.group.rotation.y += 0.0015;
+                layer.group.rotation.z += 0.0005;
+            });
+
+            controls.update();
+            composer.render();
+        }
+        animate();
+
+        window.onresize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+    </script>
+</body>
+</html>
