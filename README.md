@@ -2,6 +2,8 @@
 
 **Resonant Planet** es una biósfera sónica interactiva que transforma archivos de audio y texto en capas geológicas de un planeta de conciencia.
 
+![Resonant Planet](./Resonant_Thread.JPG)
+
 ## 🚀 Funcionalidades
 - **Motor de Plasma Armónico:** Visualización basada en interferencia de ondas (Seno/Coseno) para un movimiento fluido y rítmico.
 - **ADN Cromático Individual:** Selector de color por capa para mapeo emocional de sesiones.
