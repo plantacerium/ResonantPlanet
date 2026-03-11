@@ -22,3 +22,16 @@
 
 ---
 *Visualizado con Three.js & Custom GLSL Shaders.*
+
+---
+
+<div align="center">
+
+**Made with ❤️ and ☕ by Plantacerium**
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/plantacerium)
+
+⭐ **Star us on GitHub** ⭐
+</div>
+
+---
